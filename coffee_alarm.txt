@@ -1,0 +1,210 @@
+/**
+ 
+ * Shelly Plug PM Gen3 — Coffee Maker Monitor with Pushover
+ * Optional: with hourly heartbeat
+ *
+ * Logic:
+ * - 2:00 AM -> Reset baseline & flags
+ * - Power consumption > 2.5 Wh since reset -> “Coffee made” (Priority 0)
+ * - 09:00 -> if no consumption -> ALARM (Priority 2, Emergency)
+ * - LED: < 50 W white, >= 50 W brown
+ * - Hourly: silent heartbeat (Priority -2) with status */
+
+// ---------- CONFIG ----------
+
+let PO_API_TOKEN = "xxxxxxx";
+let PO_USER      = "xxxxxxx";
+
+let MSG_THRESHOLD      = "☕️ coffee prepared! 👍🏻";
+let MSG_NO_CONSUMPTION = "ALARM !!! 🧐 Haven't made any coffee yet!?";
+
+let PRIO_THRESHOLD       = 0;
+let SOUND_THRESHOLD      = "magic";
+
+let PRIO_NO_CONSUMPTION  = 2;
+let SOUND_NO_CONSUMPTION = "siren";
+
+let PO_RETRY_SEC  = 60;
+let PO_EXPIRE_SEC = 3600;
+
+let ENERGY_THRESHOLD_WH = 2.5;
+let MIN_CONSUMPTION_WH  = 2.5;
+
+let POWER_LED_THRESHOLD_W = 50.0;
+
+let RESET_HOUR = 2;   // 02:00
+let CHECK_HOUR = 9;   // 09:00
+
+let POLL_INTERVAL_MS = 10 * 1000;
+
+// ---------- STATE ----------
+
+let baselineWh        = null;
+let hasConsumption    = false;
+let notifiedThreshold = false;
+let notifiedNoUse     = false;
+
+let lastLedState  = "";
+let lastHour      = -1;
+
+// Für Heartbeat: letzter bekannter Messwert let lastTotalWh = null; let lastApower  = null;
+
+// ---------- PUSHOVER ----------
+
+function sendPushover(message, priority, sound) {
+  let payload = {
+    token: PO_API_TOKEN,
+    user:  PO_USER,
+    message: message,
+    priority: priority
+  };
+  if (sound) payload.sound = sound;
+  if (priority === 2) {
+    payload.retry  = PO_RETRY_SEC;
+    payload.expire = PO_EXPIRE_SEC;
+  }
+
+  Shelly.call(
+    "HTTP.POST",
+    {
+      url: "https://api.pushover.net/1/messages.json",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    },
+    null
+  );
+}
+
+function sendHeartbeat(hour) {
+  let delta = "?";
+  if (baselineWh !== null && lastTotalWh !== null) {
+    let d = lastTotalWh - baselineWh;
+    if (d < 0) d = 0;
+    delta = d;
+  }
+  let msg = "HB " + hour + "h"
+          + " W=" + (lastApower === null ? "?" : lastApower)
+          + " dWh=" + delta
+          + " kaffee=" + (hasConsumption ? "ja" : "nein");  // sendPushover(msg, -2, null); }
+
+// ---------- LED ----------
+
+function setLedState(state) {
+  if (state === lastLedState) return;
+
+  let rgb, onBr, offBr;
+  if (state === "low") {
+    rgb = [100, 70, 20]; onBr = 0;  offBr = 0;
+  } else {
+    rgb = [100, 40, 5];  onBr = 30; offBr = 5;
+  }
+
+  Shelly.call(
+    "PLUGPM_UI.SetConfig",
+    {
+      id: 0,
+      config: {
+        leds: {
+          mode: "switch",
+          colors: {
+            "pm1:0": {
+              on:  { rgb: rgb, brightness: onBr },
+              off: { rgb: rgb, brightness: offBr }
+            },
+            power: { brightness: 100 }
+          }
+        }
+      }
+    },
+    null
+  );
+  lastLedState = state;
+}
+
+// ---------- DAILY ACTIONS ----------
+
+function doDailyReset() {
+  baselineWh        = null;
+  hasConsumption    = false;
+  notifiedThreshold = false;
+  notifiedNoUse     = false;
+}
+
+function doMorningCheck() {
+  if (!hasConsumption && !notifiedNoUse) {
+    notifiedNoUse = true;
+    sendPushover(MSG_NO_CONSUMPTION, PRIO_NO_CONSUMPTION, SOUND_NO_CONSUMPTION);
+  }
+}
+
+// ---------- HOUR TRIGGER ----------
+
+function checkHourTriggers() {
+  let sys = Shelly.getComponentStatus("sys");
+  if (!sys || !sys.time) return;
+
+  let t = sys.time;
+  if (t.length < 5) return;
+
+  let hour = (t.charAt(0) - 0) * 10 + (t.charAt(1) - 0);
+  if (hour < 0 || hour > 23) return;
+
+  // Trigger nur beim Stundenwechsel
+  if (hour === lastHour) return;
+  lastHour = hour;
+
+  // Reihenfolge: erst Reset, dann Check, dann Heartbeat
+  // (damit Heartbeat den frischen State sieht)
+  if (hour === RESET_HOUR) doDailyReset();
+  if (hour === CHECK_HOUR) doMorningCheck();
+
+  sendHeartbeat(hour);
+}
+
+// ---------- POLL ----------
+
+function poll() {
+  Shelly.call(
+    "PM1.GetStatus",
+    { id: 0 },
+    function (res, code, msg) {
+      if (code !== 0 || !res) return;
+
+      // Energy
+      if (res.aenergy && typeof res.aenergy.total === "number") {
+        let totalWh = res.aenergy.total;
+        lastTotalWh = totalWh;
+
+        if (baselineWh === null) baselineWh = totalWh;
+
+        let delta = totalWh - baselineWh;
+        if (delta < 0) delta = 0;
+
+        if (delta > MIN_CONSUMPTION_WH) hasConsumption = true;
+
+        if (delta > ENERGY_THRESHOLD_WH && !notifiedThreshold) {
+          notifiedThreshold = true;
+          sendPushover(MSG_THRESHOLD, PRIO_THRESHOLD, SOUND_THRESHOLD);
+        }
+      }
+
+      // Power -> LED
+      let pW = null;
+      if (typeof res.apower === "number") pW = res.apower;
+      else if (res.aenergy && typeof res.aenergy.power === "number") pW = res.aenergy.power;
+
+      if (pW !== null) {
+        lastApower = pW;
+        if (pW < POWER_LED_THRESHOLD_W) setLedState("low");
+        else                            setLedState("high");
+      }
+
+      // Zeit-Trigger (inkl. Heartbeat)
+      checkHourTriggers();
+    }
+  );
+}
+
+// ---------- BOOT ----------
+
+Timer.set(POLL_INTERVAL_MS, true, poll); poll();
