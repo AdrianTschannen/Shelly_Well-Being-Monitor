@@ -1,3 +1,5 @@
+## Purpose: Shelly Plug PM Gen3 Well-Being Monitor
+
 This script is designed as a discreet daily well-being signal for an elderly person living alone.
 Instead of actively monitoring the person with motion sensors, cameras, or other intrusive devices, it uses a normal daily routine: preparing the morning coffee.
 When the coffee maker consumes enough energy, the system assumes that the person is awake and following their usual routine.
