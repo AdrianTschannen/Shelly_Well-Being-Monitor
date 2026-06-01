@@ -8,3 +8,9 @@ It only observes a single appliance that is already part of the person’s norma
 The solution is therefore suitable for supporting independent living while keeping the monitoring as unobtrusive as possible.
 Alternative sensors, such as motion detectors, could technically be used, but may be perceived as invasive surveillance.
 The coffee maker provides a practical, human-friendly, and privacy-conscious trigger for daily reassurance.
+
+## Disclaimer
+
+This solution is intended only as a **supplementary, non-critical notification aid** for relatives or caregivers. It is **not a medical device**, does not provide medical monitoring, and must not be used to assess a person’s health condition. The system also does **not replace professional emergency call systems, fall detection systems, medical alarms, home care services, or regular personal contact**.
+
+Notifications may fail due to power outages, internet connectivity issues, device malfunction, incorrect configuration, or third-party service interruptions. A missing coffee notification does not necessarily indicate an emergency, and a successful notification does not guarantee that the person is safe or well. For situations requiring reliable safety monitoring or emergency response, certified alarm and care systems should be used.
